@@ -1,8 +1,10 @@
 package com.nikola.despotoski.doubletaplistview;
 
 import android.content.Context;
-import android.os.CountDownTimer;
+import android.os.Handler;
+import android.os.Message;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.widget.AdapterView;
@@ -27,17 +29,40 @@ import android.widget.ListView;
  */
 public class CustomListView extends ListView{
 
-	
+	private final static int DOUBLE_TAP = 2;
+	private final static int SINGLE_TAP = 1;
+	private final static int DELAY = ViewConfiguration.getDoubleTapTimeout();
 	private boolean mTookFirstEvent=false;
-    private CountDownTimer mCountdownTillNextEvent;
-    private boolean mTimerRunning = false;
     private int mPositionHolder=-1;
-	private boolean mTookSecondEvent;
 	private int mPosition=-1;
 	private OnItemDoubleTapLister mOnDoubleTapListener = null;
 	private AdapterView<?> mParent = null;
     private View mView = null;
     private long mId= 12315;
+    private Message mMessage = null;
+    private static String TAG = "DoubleTapListView";
+    private Handler mHandler = new Handler(){
+    	
+    	@Override
+    	public void handleMessage(Message msg)
+    	{
+    		super.handleMessage(msg);
+    		
+    		switch(msg.what)
+    		{
+    		case SINGLE_TAP:
+    			Log.i(TAG, "Single tap entry");
+    			 mOnDoubleTapListener.OnSingleTap(mParent, mView, mPosition, mId);
+    			 break;
+    		case DOUBLE_TAP:
+    			Log.i(TAG, "Double tap entry");
+    			 mOnDoubleTapListener.OnDoubleTap(mParent, mView, mPosition, mId);
+    			break;
+    		}
+    	}
+    	
+    };
+    
     
 	public CustomListView(Context context, AttributeSet attrs, int defStyle) {
 		super(context, attrs, defStyle);
@@ -61,11 +86,13 @@ public class CustomListView extends ListView{
 	public void setOnItemDoubleClickListener(OnItemDoubleTapLister listener )
 	{
 		mOnDoubleTapListener = listener;
+		/*If the listener is null then throw exception*/
 		if(mOnDoubleTapListener==null)
 			throw new IllegalArgumentException("OnItemDoubleTapListener cannot be null");
 		else
 		{
-			/*If the OnItemDoubleTapListener is not null, register the default onItemClickListener to get parameters */
+			/*If the OnItemDoubleTapListener is not null, 
+			 * register the default onItemClickListener to proceed with listening */
 		setOnItemClickListener(new OnItemClickListener(){
 
 			@Override
@@ -74,51 +101,60 @@ public class CustomListView extends ListView{
 	            mView = view;
 	            mPosition = position;
 	            mId=id;
-	            if(!mTookFirstEvent) /* Testing if first tap occured */
+	            if(!mTookFirstEvent) /* Testing if first tap occurred */
 	            {
 	                mPositionHolder=position;
-	                /*this will hold the position variable from first event. In case user presses any other item (position)*/
+	                /*this will hold the position variable from first event. 
+	                 * In case user presses any other item (position)*/
 	                mTookFirstEvent=true;
-	                /* first tap acquired*/
+	            	mMessage = mMessage == null? new Message() : mHandler.obtainMessage();
+	                /*"Recycling" the message, instead creating new instance we get the old one */
+	            	mHandler.removeMessages(SINGLE_TAP);
+	                mMessage.what = SINGLE_TAP;
+	                mHandler.sendMessageDelayed(mMessage, DELAY);
+	            
 	            }
-	            if(mCountdownTillNextEvent==null && !mTimerRunning)
-	            {
-	                mTimerRunning=true;  //signaling that timer is running, (not needed)
-	                mCountdownTillNextEvent = new CountDownTimer(ViewConfiguration.getDoubleTapTimeout(), 1) //default time in milliseconds between single and double tap (see: repo of ViewConfiguration)
-	                {
-	                     @Override
-	                public void onTick(long millisUntilFinished) {
-	                   
-	                }
-	                 @Override
-	                public void onFinish() {   /*when time expires reverting to initial state */
-	                     mTookFirstEvent=false;  
-	                     mCountdownTillNextEvent=null;
-	                     mTimerRunning=false;
-	                    
-	                     if(!mTookSecondEvent) /* no second tap */                    	
-	                    	 mOnDoubleTapListener.OnSingleTap(mParent, mView, mPosition, mId);  /* send call to all who *implements* this*/
-	                   /* Instead onSingleTap we can call default onItemClickListener*/
-	                     else
-	                    	 mTookSecondEvent=false; 
-	                }
-	            };
-	            mCountdownTillNextEvent.start();  //firing the countdown
-	    }
-	    else
-	    { 
-	            if(mCountdownTillNextEvent!=null && mTimerRunning && mPositionHolder == position)
-	            {
-	                mTookFirstEvent=false;          //reverting when to non clicked state when double tap on the listview item occurred
-	                mCountdownTillNextEvent=null;
-	                mTimerRunning=false;
-	                mTookSecondEvent=true; //clutter, mCountdownTillNextEvent!=null indicates that timer is running
-	                mPosition = position;
-	                /* send call to all who *implements* this*/
-	                mOnDoubleTapListener.OnDoubleTap(mParent, mView, mPosition, mId);
+	            else
+	            { 
+		            if(mPositionHolder == position)
+		            {
+		            	mHandler.removeMessages(SINGLE_TAP);
+		            	 /*Removing the message that was queuing for scheduled 
+		            	  * sending after elapsed time > DELAY,
+		            	  * immediately when we have second event,
+		                 * when the time is < DELAY
+		                 */
+		                mPosition = position;
+		                mMessage = mHandler.obtainMessage(); 
+		               /*obtaining old message instead creating new one */
+		                mMessage.what=DOUBLE_TAP;
+		                mHandler.sendMessageAtFrontOfQueue(mMessage);
+		                /*Sending the message immediately when we have second event,
+		                 * when the time is < DELAY
+		                 */
+		                mTookFirstEvent=false;
+		               
+		              }
+			            else
+			            {
+			            	/* When the position is different from previously 
+			            	 * stored position in mPositionHolder (mPositionHolder!=position).
+			            	 * Wait for double tap on the new item at position which is 
+			            	 * different from mPositionHolder. Setting the flag mTookFirstEvent 
+			            	 * back to false. 
+			            	 * 
+			            	 * However we can ignore the case when we have mPosition!=position, when we want,
+			            	 * to do something when onSingleTap/onItemClickListener are called.
+			            	 * 
+			            	 */
+			            	mMessage = mHandler.obtainMessage();
+			            	mHandler.removeMessages(SINGLE_TAP);
+			            	mTookFirstEvent=true;
+			            	mMessage.what = SINGLE_TAP;
+			            	mPositionHolder = position;
+				            mHandler.sendMessageDelayed(mMessage, DELAY);
+			            }
 	            }
-	    }
-
 				
 			}});
 		}
